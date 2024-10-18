@@ -11,4 +11,6 @@ logs/*
 driver.hope*
 .DS_Store
 *.pkl
+*.onnx
+*.pth
 .idea

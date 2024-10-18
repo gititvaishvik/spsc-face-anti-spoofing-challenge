@@ -4,15 +4,36 @@
 # Licensed under The MIT License [see LICENSE for details]
 # Written by Ze Liu
 # --------------------------------------------------------
-
+import cv2
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.checkpoint as checkpoint
 from timm.models.layers import DropPath, to_2tuple, trunc_normal_
 import numpy as np
+# from torchvision import transforms
 
 __all__ = ['swin_v2_t', 'swin_v2_b', 'swin_v2_l', 'swin_v2_h', 'swin_v2_g']
+
+
+def preprocess_image(image, target_size=(224, 224), mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)):
+    # Resize the image to the target size
+    image_resized = cv2.resize(image, target_size)
+
+    # Convert from BGR (OpenCV default) to RGB
+    image_rgb = cv2.cvtColor(image_resized, cv2.COLOR_BGR2RGB)
+
+    # Convert pixel values to [0, 1] by dividing by 255
+    image_normalized = image_rgb / 255.0
+
+    # Normalize the image using mean and std
+    image_normalized = (image_normalized - mean) / std
+
+    # Transpose to convert the image from HWC (Height, Width, Channels) to CHW (Channels, Height, Width) format
+    image_transposed = np.transpose(image_normalized, (2, 0, 1)).astype(np.float32)
+    image_transposed = np.expand_dims(image_transposed,axis=0)
+    image_tensor = torch.tensor(image_transposed)
+    return image_tensor
 
 class GeM(nn.Module):
 
@@ -24,7 +45,7 @@ class GeM(nn.Module):
 
     def forward(self, x):
         return torch.nn.functional.adaptive_avg_pool2d(x.clamp(min=self.eps).pow(self.p),
-                            self.size).pow(1. / self.p)
+                                                       self.size).pow(1. / self.p)
 
 
 class Flatten(nn.Module):
@@ -97,6 +118,7 @@ def window_reverse(windows, window_size, H, W):
     x = windows.view(-1, H // window_size, W // window_size, window_size, window_size, C)
     x = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(-1, H, W, C)
     return x
+
 
 class WindowAttention(nn.Module):
     r""" Window based multi-head self attention (W-MSA) module with relative position bias.
@@ -187,7 +209,7 @@ class WindowAttention(nn.Module):
 
         # cosine attention
         attn = (F.normalize(q, dim=-1) @ F.normalize(k, dim=-1).transpose(-2, -1))
-        logit_scale = torch.clamp(self.logit_scale, max=torch.log(torch.tensor(1. / 0.01).cuda())).exp()
+        logit_scale = torch.clamp(self.logit_scale, max=torch.log(torch.tensor(1. / 0.01).cpu())).exp()
         # logit_scale = torch.clamp(self.logit_scale, max=torch.log(torch.tensor(1. / 0.01))).exp()
         attn = attn * logit_scale
 
@@ -633,7 +655,7 @@ class SwinTransformerV2(nn.Module):
         self.norm = norm_layer(self.num_features)
 
         # option-A: inherit from iconvnext
-        #self.output_layer = nn.Sequential(norm_layer(self.num_features),
+        # self.output_layer = nn.Sequential(norm_layer(self.num_features),
         #                                  Flatten(),
         #                                  nn.Linear(window_size * window_size * self.num_features, 512),
         #                                  nn.BatchNorm1d(512))
@@ -683,7 +705,19 @@ class SwinTransformerV2(nn.Module):
         return {"cpb_mlp", "logit_scale", 'relative_position_bias_table'}
 
     def forward_features(self, x):
-        with torch.cuda.amp.autocast(self.fp16):
+        # Ensure that the autocast context is only used if a GPU is available
+        if torch.cuda.is_available() and self.fp16:
+            with torch.cuda.amp.autocast():
+                x = self.patch_embed(x)
+                if self.ape:
+                    x = x + self.absolute_pos_embed
+                x = self.pos_drop(x)
+
+                for layer in self.layers:
+                    x = layer(x)
+
+            x = self.norm(x.float())  # B L C
+        else:
             x = self.patch_embed(x)
             if self.ape:
                 x = x + self.absolute_pos_embed
@@ -692,10 +726,10 @@ class SwinTransformerV2(nn.Module):
             for layer in self.layers:
                 x = layer(x)
 
-        x = self.norm(x.float() if self.fp16 else x)  # B L C
+            x = self.norm(x)  # B L C
+
         x = self.avgpool(x.transpose(1, 2))  # B C 1
         x = torch.flatten(x, 1)
-        # x = self.output_layer(x.float() if self.fp16 else x)
         return x
 
     def forward(self, x):
@@ -727,23 +761,24 @@ def swin_v2_t(num_classes, fp16=False):
     drop_rate = 0.0
     drop_path_rate = 0.1
     model = SwinTransformerV2(img_size=img_size,
-                            patch_size=patch_size,
-                            in_chans=in_chans,
-                            embed_dim=embed_dim,
-                            depths=depths,
-                            num_heads=num_heads,
-                            window_size=window_size,
-                            mlp_ratio=mlp_ratio,
-                            num_classes=num_classes,
-                            qkv_bias=True,
-                            qk_scale=None,
-                            drop_rate=drop_rate,
-                            drop_path_rate=drop_path_rate,
-                            ape=False,
-                            patch_norm=True,
-                            use_checkpoint=False,
-                            fp16=fp16)
+                              patch_size=patch_size,
+                              in_chans=in_chans,
+                              embed_dim=embed_dim,
+                              depths=depths,
+                              num_heads=num_heads,
+                              window_size=window_size,
+                              mlp_ratio=mlp_ratio,
+                              num_classes=num_classes,
+                              qkv_bias=True,
+                              qk_scale=None,
+                              drop_rate=drop_rate,
+                              drop_path_rate=drop_path_rate,
+                              ape=False,
+                              patch_norm=True,
+                              use_checkpoint=False,
+                              fp16=fp16)
     return model
+
 
 def swin_v2_b(num_classes, fp16):
     img_size = 224
@@ -757,23 +792,24 @@ def swin_v2_b(num_classes, fp16):
     drop_rate = 0.0
     drop_path_rate = 0.1
     model = SwinTransformerV2(img_size=img_size,
-                            patch_size=patch_size,
-                            in_chans=in_chans,
-                            embed_dim=embed_dim,
-                            depths=depths,
-                            num_heads=num_heads,
-                            window_size=window_size,
-                            mlp_ratio=mlp_ratio,
-                            num_classes=num_classes,
-                            qkv_bias=True,
-                            qk_scale=None,
-                            drop_rate=drop_rate,
-                            drop_path_rate=drop_path_rate,
-                            ape=False,
-                            patch_norm=True,
-                            use_checkpoint=False,
-                            fp16=fp16)
+                              patch_size=patch_size,
+                              in_chans=in_chans,
+                              embed_dim=embed_dim,
+                              depths=depths,
+                              num_heads=num_heads,
+                              window_size=window_size,
+                              mlp_ratio=mlp_ratio,
+                              num_classes=num_classes,
+                              qkv_bias=True,
+                              qk_scale=None,
+                              drop_rate=drop_rate,
+                              drop_path_rate=drop_path_rate,
+                              ape=False,
+                              patch_norm=True,
+                              use_checkpoint=False,
+                              fp16=fp16)
     return model
+
 
 def swin_v2_l(num_classes, fp16=False):
     img_size = 224
@@ -787,22 +823,22 @@ def swin_v2_l(num_classes, fp16=False):
     drop_rate = 0.0
     drop_path_rate = 0.2
     model = SwinTransformerV2(img_size=img_size,
-                            patch_size=patch_size,
-                            in_chans=in_chans,
-                            embed_dim=embed_dim,
-                            depths=depths,
-                            num_heads=num_heads,
-                            window_size=window_size,
-                            mlp_ratio=mlp_ratio,
-                            num_classes=num_classes,
-                            qkv_bias=True,
-                            qk_scale=None,
-                            drop_rate=drop_rate,
-                            drop_path_rate=drop_path_rate,
-                            ape=False,
-                            patch_norm=True,
-                            use_checkpoint=False,
-                            fp16=fp16)
+                              patch_size=patch_size,
+                              in_chans=in_chans,
+                              embed_dim=embed_dim,
+                              depths=depths,
+                              num_heads=num_heads,
+                              window_size=window_size,
+                              mlp_ratio=mlp_ratio,
+                              num_classes=num_classes,
+                              qkv_bias=True,
+                              qk_scale=None,
+                              drop_rate=drop_rate,
+                              drop_path_rate=drop_path_rate,
+                              ape=False,
+                              patch_norm=True,
+                              use_checkpoint=False,
+                              fp16=fp16)
     return model
 
 
@@ -819,23 +855,23 @@ def swin_v2_h(num_classes, fp16=False):
     drop_rate = 0.0
     drop_path_rate = 0.2
     model = SwinTransformerV2(img_size=img_size,
-                            patch_size=patch_size,
-                            in_chans=in_chans,
-                            embed_dim=embed_dim,
-                            depths=depths,
-                            num_heads=num_heads,
-                            window_size=window_size,
-                            mlp_ratio=mlp_ratio,
-                            num_classes=num_classes,
-                            qkv_bias=True,
-                            qk_scale=None,
-                            drop_rate=drop_rate,
-                            drop_path_rate=drop_path_rate,
-                            ape=False,
-                            patch_norm=True,
-                            use_checkpoint=False,
-                            extra_norm_period=6,
-                            fp16=fp16)
+                              patch_size=patch_size,
+                              in_chans=in_chans,
+                              embed_dim=embed_dim,
+                              depths=depths,
+                              num_heads=num_heads,
+                              window_size=window_size,
+                              mlp_ratio=mlp_ratio,
+                              num_classes=num_classes,
+                              qkv_bias=True,
+                              qk_scale=None,
+                              drop_rate=drop_rate,
+                              drop_path_rate=drop_path_rate,
+                              ape=False,
+                              patch_norm=True,
+                              use_checkpoint=False,
+                              extra_norm_period=6,
+                              fp16=fp16)
     return model
 
 
@@ -854,29 +890,29 @@ def swin_v2_g(num_classes, fp16=False):
     drop_rate = 0.0
     drop_path_rate = 0.3
     model = SwinTransformerV2(img_size=img_size,
-                            patch_size=patch_size,
-                            in_chans=in_chans,
-                            embed_dim=embed_dim,
-                            depths=depths,
-                            num_heads=num_heads,
-                            window_size=window_size,
-                            mlp_ratio=mlp_ratio,
-                            num_classes=num_classes,
-                            qkv_bias=True,
-                            qk_scale=None,
-                            drop_rate=drop_rate,
-                            drop_path_rate=drop_path_rate,
-                            ape=False,
-                            patch_norm=True,
-                            use_checkpoint=False,
-                            extra_norm_period=6,
-                            fp16=fp16)
+                              patch_size=patch_size,
+                              in_chans=in_chans,
+                              embed_dim=embed_dim,
+                              depths=depths,
+                              num_heads=num_heads,
+                              window_size=window_size,
+                              mlp_ratio=mlp_ratio,
+                              num_classes=num_classes,
+                              qkv_bias=True,
+                              qk_scale=None,
+                              drop_rate=drop_rate,
+                              drop_path_rate=drop_path_rate,
+                              ape=False,
+                              patch_norm=True,
+                              use_checkpoint=False,
+                              extra_norm_period=6,
+                              fp16=fp16)
     return model
 
 
 def load_pretrain(model, pretrain):
     print("=> loading pretrained weights from '{}'".format(pretrain))
-    state_dict = torch.load(pretrain, map_location="cpu")
+    state_dict = torch.load(pretrain, map_location=torch.device("cpu"))
     if 'model_state' in state_dict.keys():
         state_dict = state_dict['model_state']
     elif 'state_dict' in state_dict.keys():
@@ -911,16 +947,16 @@ def load_pretrain(model, pretrain):
 
 
 if __name__ == '__main__':
-    model = swin_v2_h(num_classes=2)
+    model = swin_v2_b(num_classes=2, fp16=False)
     print(model)
+    weight_path = r"C:\Users\Mantra\Downloads\face_swin_v2_base (1).pth"
+    model = load_pretrain(model, pretrain=weight_path)
+    # model.cuda(0)
 
-    model.cuda(0)
-
-    data = torch.zeros((2, 3, 224, 224)).cuda(0)
-    out = model(data)
-
-    print(out.shape)
-    print(f'network output:{out}')
+    # img_path = r"C:\Users\Mantra\Documents\facial\liveness_models\LCC_FASD_development\real\AGL752VM_id147_s0_15.png"
+    # spoof_img_path = r"C:\Users\Mantra\Documents\facial\liveness_models\LCC_FASD_development\spoof\FT720P_G780_REDMI4X_id0_s1_45.png"
 
 
-
+    # print(out[0].shape)
+    # print(f'network output:{out[0]}')
+    # print(f'network output:{out[1].shape}')
