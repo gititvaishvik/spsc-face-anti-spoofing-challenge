@@ -17,8 +17,8 @@ def convert(torch_model, torch_input, out_onnx_path):
             torch_input,  # model input (or a tuple for multiple inputs)
             out_onnx_path,  # where to save the model (can be a file or file-like object)
             export_params=True,  # store the trained parameter weights inside the model file
-            opset_version=11,  # the ONNX version to export the model to
-            do_constant_folding=False,  # whether to execute constant folding for optimization
+            opset_version=17,  # the ONNX version to export the model to
+            do_constant_folding=True,  # whether to execute constant folding for optimization
             input_names=['input'],  # the model's input names
             output_names=['output'],  # the model's output names
             dynamic_axes={'input': {0: 'batch_size'},  # variable length axes
@@ -35,19 +35,19 @@ def convert(torch_model, torch_input, out_onnx_path):
 def main():
     model = swin_v2_b(num_classes=2, fp16=False)
     # print(model)
-    onnx_model_path = "./swinV2_base.onnx"
-    weight_path = r"C:\Users\Mantra\Downloads\face_swin_v2_base (1).pth"
-    model = load_pretrain(model, pretrain=weight_path)
+    onnx_model_path = "./swinV2_base_opset_17.onnx"
+    weight_path = r"swinV2_base_without_extra_layers.pth"
+    model_w = load_pretrain(model, pretrain=weight_path)
     # Convert model to FP16
-    model.half()
+    # model.half()
 
     # Save the FP16 weights
-    torch.save(model.state_dict(), 'swinV2_base_model_fp16_weights.pth')
-    # img = cv2.imread(r"C:\Users\Mantra\Documents\facial\liveness_models\spppf_test_images\live\000074_face_1.jpg")
-    # data = preprocess_image(img)
-    # convert(model, data,onnx_model_path)
-    # model_onnx = onnx.load(onnx_model_path)
-    # onnx.checker.check_model(model_onnx)
+    # torch.save(model.state_dict(), 'swinV2_base_model_fp16_weights.pth')
+    img = cv2.imread(r"C:\Users\Mantra\Documents\facial\liveness_models\spppf_test_images\live\000074_face_1.jpg")
+    data = preprocess_image(img)
+    convert(model_w, data,onnx_model_path)
+    model_onnx = onnx.load(onnx_model_path)
+    onnx.checker.check_model(model_onnx)
 
 
 if __name__ == '__main__':

@@ -948,9 +948,9 @@ def load_pretrain(model, pretrain):
 
 if __name__ == '__main__':
     model = swin_v2_b(num_classes=2, fp16=False)
-    print(model)
     weight_path = r"C:\Users\Mantra\Downloads\face_swin_v2_base (1).pth"
     model = load_pretrain(model, pretrain=weight_path)
+    print(model)
     # model.cuda(0)
 
     # img_path = r"C:\Users\Mantra\Documents\facial\liveness_models\LCC_FASD_development\real\AGL752VM_id147_s0_15.png"

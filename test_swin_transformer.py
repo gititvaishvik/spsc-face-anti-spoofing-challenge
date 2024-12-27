@@ -9,12 +9,16 @@ import pandas as pd
 import torch
 if __name__ == '__main__':
     model = swin_v2_b(num_classes=2, fp16=False)
-    print(model)
+
     # weight_path = r"C:\Users\Mantra\Downloads\face_swin_v2_base (1).pth"
-    weight_path = "swinV2_base_model_fp16_weights.pth"
+    weight_path = "weights/face_swin_v2_base (1).pth"
     model = load_pretrain(model, pretrain=weight_path)
-    model.half()
-    model.eval()
+    # model.eval()
+    print(model)
+    torch.save(model.state_dict(), 'swinV2_base_without_extra_layers.pth')
+    # raise "stop here"
+    # model.half()
+
     dir_path = r"C:\Users\Mantra\Documents\facial\liveness_models\spppf_test_images"
     results = []
     output_csv_path = './swin_transformer_scores_v2_2.csv'
